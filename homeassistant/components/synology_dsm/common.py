@@ -26,6 +26,8 @@ from synology_dsm.exceptions import (
     SynologyDSMRequestException,
 )
 
+from .py_synologydsm_api_aux.backup.backup import SynoBackup
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_HOST,
@@ -79,6 +81,7 @@ class SynoApi:
         self.system: SynoCoreSystem | None = None
         self.upgrade: SynoCoreUpgrade | None = None
         self.utilisation: SynoCoreUtilization | None = None
+        self.hyper_backup: SynoBackup = None
         self.external_usb: SynoCoreExternalUSB | None = None
 
         # Should we fetch them
@@ -92,6 +95,7 @@ class SynoApi:
         self._with_system = True
         self._with_upgrade = True
         self._with_utilisation = True
+        self._with_hyper_backup = True
         self._with_external_usb = True
 
         self._login_future: asyncio.Future[None] | None = None
@@ -267,6 +271,7 @@ class SynoApi:
         self._with_external_usb = bool(
             self._fetching_entities.get(SynoCoreExternalUSB.API_KEY)
         )
+        self._with_hyper_backup = bool(self._fetching_entities.get(SynoBackup.API_KEY))
 
         # Reset not used API, information is not reset since it's used in device_info
         if not self._with_security:
@@ -328,6 +333,13 @@ class SynoApi:
                 self.dsm.reset(self.utilisation)
             self.utilisation = None
 
+        if not self._with_hyper_backup:
+            LOGGER.debug(
+                "Disable hyper backup api from being updated for '%s'",
+                self._entry.unique_id,
+            )
+            self.hyper_backup = None
+            
         if not self._with_external_usb:
             LOGGER.debug(
                 "Disable external usb api from being updated for '%s'",
@@ -381,6 +393,10 @@ class SynoApi:
             )
             self.surveillance_station = self.dsm.surveillance_station
 
+        if self._with_hyper_backup:
+            LOGGER.debug("Enable hyper backup api updates for '%s'", self._entry.unique_id)
+            self.hyper_backup = SynoBackup(self.dsm)        
+
         if self._with_external_usb:
             LOGGER.debug(
                 "Enable external usb api updates for '%s'", self._entry.unique_id
@@ -423,6 +439,9 @@ class SynoApi:
         self._setup_api_requests()
         await self.dsm.update(self._with_information)
 
+        if self._with_hyper_backup:
+            LOGGER.debug("Start hyper backup update for '%s' (%s)", self._entry.unique_id, self.config_url)
+            self.hyper_backup.update()
 
 def raise_config_entry_auth_error(err: Exception) -> None:
     """Raise ConfigEntryAuthFailed if error is related to authentication."""
