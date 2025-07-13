@@ -153,3 +153,42 @@ class SynologyDSMDeviceEntity(
             via_device=(DOMAIN, information.serial),
             configuration_url=self._api.config_url,
         )
+
+
+class SynologyDSMBackupTaskEntity(SynologyDSMBaseEntity):
+    """Representation of a Synology Hyper backup task entry."""
+
+    def __init__(
+        self,
+        api: SynoApi,
+        coordinator: DataUpdateCoordinator[dict[str, dict[str, Any]]],
+        description: SynologyDSMEntityDescription,
+        device_id: int | None = None,
+    ) -> None:
+        """Initialize the Synology DSM disk or volume entity."""
+        super().__init__(api, coordinator, description)
+        self._device_id = device_id
+        self._device_name: str | None = None
+        self._device_manufacturer: str | None = None
+        self._device_model: str | None = None
+        self._device_type = None
+
+        task = self._api.hyper_backup.get_task(self._device_id)
+        self._device_manufacturer = "Synology"
+        self._device_name = task['name']
+        if task['transfer_type'].startswith('image_'):  # rename "image_local" to "Local Image", etc
+            task['transfer_type'] = task['transfer_type'][6:] + ' image'
+        self._device_model = task['transfer_type'].replace("_", " ").title() + ' Backup Task'
+
+        self._attr_name = (
+            f"{self._device_name} {description.name}"
+        )
+        self._attr_unique_id += f"_hyper_{self._device_id}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, f"{self._api.information.serial}_hyper_{self._device_id}")},
+            name=f"{self._device_name}",
+            manufacturer=self._device_manufacturer,
+            model=self._device_model,
+            via_device=(DOMAIN, self._api.information.serial),
+            configuration_url=self._api.config_url,
+        )
