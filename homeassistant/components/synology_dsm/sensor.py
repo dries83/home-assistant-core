@@ -38,8 +38,9 @@ from .entity import (
     SynologyDSMBaseEntity,
     SynologyDSMDeviceEntity,
     SynologyDSMEntityDescription,
+    SynologyDSMBackupTaskEntity,
 )
-
+from .py_synologydsm_api_aux.backup.backup import SynoBackup
 
 @dataclass(frozen=True, kw_only=True)
 class SynologyDSMSensorEntityDescription(
@@ -328,9 +329,88 @@ INFORMATION_SENSORS: tuple[SynologyDSMSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_registry_enabled_default=False,
         entity_category=EntityCategory.DIAGNOSTIC,
+
+HYPER_BACKUP_SENSORS: tuple[SynologyDSMSensorEntityDescription, ...] = (
+    SynologyDSMSensorEntityDescription(
+        api_key=SynoBackup.API_KEY,
+        key="used_size",
+        name="Target Current Size",
+        native_unit_of_measurement=DATA_GIGABYTES,
+        icon="mdi:chart-pie",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SynologyDSMSensorEntityDescription(
+        api_key=SynoBackup.API_KEY,
+        key="is_backing_up",
+        name="Currently Backing Up",
+        icon="mdi:backup-restore",
+    ),
+    SynologyDSMSensorEntityDescription(
+        api_key=SynoBackup.API_KEY,
+        key="used_size",
+        name="Backup Progress",
+        native_unit_of_measurement=PERCENTAGE,
+        icon="mdi:progress-upload",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SynologyDSMSensorEntityDescription(
+        api_key=SynoBackup.API_KEY,
+        key="status",
+        name="Status",
+        icon="mdi:checkbox-marked-circle-outline",
+    ),
+    SynologyDSMSensorEntityDescription(
+        api_key=SynoBackup.API_KEY,
+        key="health",
+        name="Health",
+        icon="mdi:hospital-box-outline",
+    ),
+    SynologyDSMSensorEntityDescription(
+        api_key=SynoBackup.API_KEY,
+        key="previous_backup_time",
+        name="Most Recent Backup",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        icon="mdi:backburger",
+    ),
+    SynologyDSMSensorEntityDescription(
+        api_key=SynoBackup.API_KEY,
+        key="next_backup_time",
+        name="Next Scheduled Backup",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        icon="mdi:forwardburger",
+    ),
+    SynologyDSMSensorEntityDescription(
+        api_key=SynoBackup.API_KEY,
+        key="previous_result",
+        name="Most Recent Result",
+        icon="mdi:history",
+    ),
+    SynologyDSMSensorEntityDescription(
+        api_key=SynoBackup.API_KEY,
+        key="previous_error",
+        name="Most Recent Error",
+        icon="mdi:alert-circle-outline",
+    ),
+    SynologyDSMSensorEntityDescription(
+        api_key=SynoBackup.API_KEY,
+        key="state",
+        name="Task State (raw)",
+        entity_registry_enabled_default=False,
+    ),
+    SynologyDSMSensorEntityDescription(
+        api_key=SynoBackup.API_KEY,
+        key="raw_status",
+        name="Status (raw)",
+        entity_registry_enabled_default=False,
+    ),
+    SynologyDSMSensorEntityDescription(
+        api_key=SynoBackup.API_KEY,
+        key="has_schedule",
+        name="Schedule Enabled",
+        icon="mdi:calendar-clock",
+        entity_registry_enabled_default=False,        
     ),
 )
-
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -350,6 +430,7 @@ async def async_setup_entry(
         | SynoDSMStorageSensor
         | SynoDSMInfoSensor
         | SynoDSMExternalUSBSensor
+        | SynoDSMHyperBackupSensor
     ] = [
         SynoDSMUtilSensor(api, coordinator, description)
         for description in UTILISATION_SENSORS
@@ -375,6 +456,16 @@ async def async_setup_entry(
             ]
         )
 
+    # Handle all hyper backup tasks
+    if api.hyper_backup.task_ids:
+        entities.extend(
+            [
+                SynoDSMHyperBackupSensor(api, coordinator, description, task)
+                for task in entry.data.get(CONF_TASKS, api.hyper_backup.task_ids)
+                for description in HYPER_BACKUP_SENSORS
+            ]
+        )                
+                
     # Handle all external usb
     if external_usb is not None and external_usb.get_devices:
         entities.extend(
@@ -475,7 +566,39 @@ class SynoDSMStorageSensor(SynologyDSMDeviceEntity, SynoDSMSensor):
             StateType,
             getattr(self._api.storage, self.entity_description.key)(self._device_id),
         )
+        
+class SynoDSMHyperBackupSensor(SynologyDSMBackupTaskEntity, SynoDSMSensor):
+    """Representation a Synology HyperBackup sensor."""
 
+    entity_description: SynologyDSMSensorEntityDescription
+
+    def __init__(
+        self,
+        api: SynoApi,
+        coordinator: DataUpdateCoordinator[dict[str, dict[str, Any]]],
+        description: SynologyDSMSensorEntityDescription,
+        device_id: str | None = None,
+    ) -> None:
+        """Initialize the Synology DSM HyperBackup sensor entity."""
+        super().__init__(api, coordinator, description, device_id)
+
+    @property
+    def native_value(self) -> Any | None:
+        """Return the state."""
+        attr = getattr(self._api.hyper_backup, self.entity_description.key)(self._device_id)
+        if attr is None:
+            return None
+
+        # Add timezone to datetime objects
+        # TODO: Parse `self._api.system.time_zone` to timezones. E.g. "(GMT-08:00) Pacific Time (US & Canada); Tijuana"
+        if self.device_class == SensorDeviceClass.TIMESTAMP:
+            if attr.tzinfo is None:
+                attr = attr.replace(tzinfo=datetime.now(timezone.utc).astimezone().tzinfo)
+
+        if self.native_unit_of_measurement == DATA_GIGABYTES:
+            return round(attr / 1024.0 ** 2, 1)
+
+        return attr
 
 class SynoDSMExternalUSBSensor(SynologyDSMDeviceEntity, SynoDSMSensor):
     """Representation a Synology Storage sensor."""
@@ -514,7 +637,6 @@ class SynoDSMExternalUSBSensor(SynologyDSMDeviceEntity, SynoDSMSensor):
             return None
 
         return attr  # type: ignore[no-any-return]
-
 
 class SynoDSMInfoSensor(SynoDSMSensor):
     """Representation a Synology information sensor."""
