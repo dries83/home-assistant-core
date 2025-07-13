@@ -18,6 +18,7 @@ from synology_dsm.exceptions import (
     SynologyDSMLoginInvalidException,
     SynologyDSMRequestException,
 )
+from .py_synologydsm_api_aux.backup.backup import SynoBackup
 import voluptuous as vol
 
 from homeassistant.config_entries import (
@@ -505,6 +506,8 @@ async def _login_and_fetch_syno_info(api: SynologyDSM, otp_code: str | None) -> 
     await api.utilisation.update()
     await api.storage.update()
     await api.network.update()
+    hyper_backup = SynoBackup(api)
+    hyper_backup.update(get_all_target_data=True)
 
     if (
         not api.information.serial
